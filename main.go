@@ -116,6 +116,10 @@ static guint get_event_keyval(GdkEventKey *event) {
 static guint get_event_state(GdkEventKey *event) {
     return event->state;
 }
+
+static void popup_menu_at_pointer(GtkMenu *menu) {
+    gtk_menu_popup(menu, NULL, NULL, NULL, NULL, 3, gtk_get_current_event_time());
+}
 */
 import "C"
 
@@ -173,7 +177,7 @@ func main() {
 	gtk.Init(nil)
 
 	app = &App{
-		sshRegex: regexp.MustCompile(`ssh\s+(?:(-[A-Za-z]\s+\S+\s+)*)?(?:([^@\s]+)@)?(\S+)(?:\s+-p\s+(\d+))?`),
+		sshRegex: regexp.MustCompile(`^ssh\s+(?:.*\s+)?(?:([^@\s]+)@)?([^\s:]+)(?::(\d+))?(?:\s+-p\s*(\d+))?`),
 	}
 
 	if err := app.loadPaths(); err != nil {
@@ -538,12 +542,12 @@ func (a *App) connectToHost(host SSHHost) {
 }
 
 func (a *App) showAddHostDialog() {
-	dialog, _ := gtk.DialogNewWithButtons(
-		"Add SSH Host",
-		a.window,
-		gtk.DIALOG_MODAL|gtk.DIALOG_DESTROY_WITH_PARENT,
-		[]interface{}{"Cancel", gtk.RESPONSE_CANCEL, "Add", gtk.RESPONSE_OK},
-	)
+	dialog, _ := gtk.DialogNew()
+	dialog.SetTransientFor(a.window)
+	dialog.SetModal(true)
+	dialog.SetTitle("Add SSH Host")
+	dialog.AddButton("Cancel", gtk.RESPONSE_CANCEL)
+	dialog.AddButton("Add", gtk.RESPONSE_OK)
 	dialog.SetDefaultSize(400, 300)
 
 	contentArea, _ := dialog.GetContentArea()
@@ -721,20 +725,22 @@ func (a *App) checkForSSHCommand(cmd string) {
 
 	var sshUser, host, port string
 
-	if matches[2] != "" {
-		sshUser = matches[2]
+	if matches[1] != "" {
+		sshUser = matches[1]
 	} else {
 		currentUser, _ := user.Current()
 		sshUser = currentUser.Username
 	}
 
-	host = matches[3]
+	host = matches[2]
 	if host == "" {
 		return
 	}
 
 	if matches[4] != "" {
 		port = matches[4]
+	} else if matches[3] != "" {
+		port = matches[3]
 	} else {
 		port = "22"
 	}
@@ -790,16 +796,16 @@ func (a *App) showContextMenuAt() {
 	menu.Append(settingsItem)
 
 	menu.ShowAll()
-	menu.PopupAtPointer(nil)
+	C.popup_menu_at_pointer((*C.GtkMenu)(unsafe.Pointer(menu.Native())))
 }
 
 func (a *App) showSettingsDialog() {
-	dialog, _ := gtk.DialogNewWithButtons(
-		"Settings",
-		a.window,
-		gtk.DIALOG_MODAL|gtk.DIALOG_DESTROY_WITH_PARENT,
-		[]interface{}{"Cancel", gtk.RESPONSE_CANCEL, "Apply", gtk.RESPONSE_OK},
-	)
+	dialog, _ := gtk.DialogNew()
+	dialog.SetTransientFor(a.window)
+	dialog.SetModal(true)
+	dialog.SetTitle("Settings")
+	dialog.AddButton("Cancel", gtk.RESPONSE_CANCEL)
+	dialog.AddButton("Apply", gtk.RESPONSE_OK)
 	dialog.SetDefaultSize(450, 350)
 
 	contentArea, _ := dialog.GetContentArea()
