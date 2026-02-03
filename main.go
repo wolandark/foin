@@ -177,7 +177,7 @@ func main() {
 	gtk.Init(nil)
 
 	app = &App{
-		sshRegex: regexp.MustCompile(`^ssh\s+(?:.*\s+)?(?:([^@\s]+)@)?([^\s:]+)(?::(\d+))?(?:\s+-p\s*(\d+))?`),
+		sshRegex: regexp.MustCompile(`ssh\s+(?:(?:-[A-Za-z]+\s+\S+\s+)*)?(?:([^@\s]+)@)?([A-Za-z0-9][-A-Za-z0-9.]+)(?:\s+-p\s+(\d+))?`),
 	}
 
 	if err := app.loadPaths(); err != nil {
@@ -499,46 +499,39 @@ func (a *App) onHostActivated(listBox *gtk.ListBox, row *gtk.ListBoxRow) {
 }
 
 func (a *App) connectToHost(host SSHHost) {
-	var args []string
-	args = append(args, "ssh")
+	var cmd strings.Builder
+
+	if host.Password != "" {
+		cmd.WriteString("sshpass -p '")
+		cmd.WriteString(strings.ReplaceAll(host.Password, "'", "'\\''"))
+		cmd.WriteString("' ")
+	}
+
+	cmd.WriteString("ssh ")
 
 	if host.KeyFile != "" {
-		args = append(args, "-i", host.KeyFile)
+		cmd.WriteString("-i ")
+		cmd.WriteString(host.KeyFile)
+		cmd.WriteString(" ")
 	}
 
 	if host.Port != "" && host.Port != "22" {
-		args = append(args, "-p", host.Port)
+		cmd.WriteString("-p ")
+		cmd.WriteString(host.Port)
+		cmd.WriteString(" ")
 	}
 
-	target := host.Host
 	if host.User != "" {
-		target = host.User + "@" + host.Host
+		cmd.WriteString(host.User)
+		cmd.WriteString("@")
 	}
-	args = append(args, target)
+	cmd.WriteString(host.Host)
+	cmd.WriteString("\n")
 
-	if host.Password != "" {
-		args = []string{"sshpass", "-p", host.Password, "ssh"}
-		if host.KeyFile != "" {
-			args = append(args, "-i", host.KeyFile)
-		}
-		if host.Port != "" && host.Port != "22" {
-			args = append(args, "-p", host.Port)
-		}
-		args = append(args, target)
-	}
-
-	cArgs := make([]*C.char, len(args)+1)
-	for i, arg := range args {
-		cArgs[i] = C.CString(arg)
-		defer C.free(unsafe.Pointer(cArgs[i]))
-	}
-	cArgs[len(args)] = nil
-
-	homeDir, _ := os.UserHomeDir()
-	cHomeDir := C.CString(homeDir)
-	defer C.free(unsafe.Pointer(cHomeDir))
-
-	C.vte_spawn_command(a.vte, cHomeDir, &cArgs[0])
+	cmdStr := cmd.String()
+	cCmd := C.CString(cmdStr)
+	defer C.free(unsafe.Pointer(cCmd))
+	C.vte_feed_child_text(a.vte, cCmd)
 }
 
 func (a *App) showAddHostDialog() {
@@ -695,16 +688,13 @@ func goKeyPressCallback(event *C.GdkEventKey) C.gboolean {
 func goCommitCallback(text *C.char, length C.guint) {
 	goText := C.GoStringN(text, C.int(length))
 
-	app.mu.Lock()
-	defer app.mu.Unlock()
+	var cmdToCheck string
 
+	app.mu.Lock()
 	for _, ch := range goText {
 		if ch == '\r' || ch == '\n' {
-			cmd := strings.TrimSpace(app.currentInput.String())
+			cmdToCheck = strings.TrimSpace(app.currentInput.String())
 			app.currentInput.Reset()
-			if cmd != "" {
-				go app.checkForSSHCommand(cmd)
-			}
 		} else if ch == '\x7f' || ch == '\b' {
 			s := app.currentInput.String()
 			if len(s) > 0 {
@@ -714,6 +704,11 @@ func goCommitCallback(text *C.char, length C.guint) {
 		} else if ch >= 32 && ch < 127 {
 			app.currentInput.WriteRune(ch)
 		}
+	}
+	app.mu.Unlock()
+
+	if cmdToCheck != "" {
+		go app.checkForSSHCommand(cmdToCheck)
 	}
 }
 
@@ -737,9 +732,7 @@ func (a *App) checkForSSHCommand(cmd string) {
 		return
 	}
 
-	if matches[4] != "" {
-		port = matches[4]
-	} else if matches[3] != "" {
+	if len(matches) > 3 && matches[3] != "" {
 		port = matches[3]
 	} else {
 		port = "22"
