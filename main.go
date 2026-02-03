@@ -6,13 +6,8 @@ package main
 #include <vte/vte.h>
 #include <stdlib.h>
 
-extern void goCommitCallback(char *text, guint length);
 extern gboolean goButtonReleaseCallback(GdkEventButton *event);
 extern gboolean goKeyPressCallback(GdkEventKey *event);
-
-static void on_commit(VteTerminal *terminal, gchar *text, guint size, gpointer user_data) {
-    goCommitCallback((char*)text, size);
-}
 
 static gboolean on_button_release(GtkWidget *widget, GdkEventButton *event, gpointer user_data) {
     return goButtonReleaseCallback(event);
@@ -24,7 +19,6 @@ static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer use
 
 static GtkWidget* create_vte_terminal() {
     GtkWidget *term = vte_terminal_new();
-    g_signal_connect(term, "commit", G_CALLBACK(on_commit), NULL);
     g_signal_connect(term, "button-release-event", G_CALLBACK(on_button_release), NULL);
     g_signal_connect(term, "key-press-event", G_CALLBACK(on_key_press), NULL);
     return term;
@@ -161,9 +155,10 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/gotk3/gotk3/gdk"
@@ -198,17 +193,17 @@ type Config struct {
 }
 
 type App struct {
-	window       *gtk.Window
-	terminal     *C.GtkWidget
-	vte          *C.VteTerminal
-	hostList     *gtk.ListBox
-	hosts        []SSHHost
-	config       Config
-	configPath   string
-	hostsPath    string
-	sshRegex     *regexp.Regexp
-	mu           sync.Mutex
-	currentInput strings.Builder
+	window      *gtk.Window
+	terminal    *C.GtkWidget
+	vte         *C.VteTerminal
+	hostList    *gtk.ListBox
+	hosts       []SSHHost
+	config      Config
+	configPath  string
+	hostsPath   string
+	mu          sync.Mutex
+	shellPid    int
+	seenSSHPids map[int]bool
 }
 
 var app *App
@@ -217,7 +212,7 @@ func main() {
 	gtk.Init(nil)
 
 	app = &App{
-		sshRegex: regexp.MustCompile(`ssh\s+(?:(?:-[A-Za-z]+\s+\S+\s+)*)?(?:([^@\s]+)@)?([A-Za-z0-9][-A-Za-z0-9.]+)(?:\s+-p\s+(\d+))?`),
+		seenSSHPids: make(map[int]bool),
 	}
 
 	if err := app.loadPaths(); err != nil {
@@ -422,6 +417,8 @@ func (a *App) createUI() error {
 	cHomeDir := C.CString(homeDir)
 	defer C.free(unsafe.Pointer(cHomeDir))
 	C.vte_spawn_shell(a.vte, cHomeDir)
+
+	a.findShellPid()
 
 	termGtk.SetHExpand(true)
 	termGtk.SetVExpand(true)
@@ -745,60 +742,163 @@ func goKeyPressCallback(event *C.GdkEventKey) C.gboolean {
 	return C.FALSE
 }
 
-//export goCommitCallback
-func goCommitCallback(text *C.char, length C.guint) {
-	goText := C.GoStringN(text, C.int(length))
 
-	var cmdToCheck string
-
-	app.mu.Lock()
-	for _, ch := range goText {
-		if ch == '\r' || ch == '\n' {
-			cmdToCheck = strings.TrimSpace(app.currentInput.String())
-			app.currentInput.Reset()
-		} else if ch == '\x7f' || ch == '\b' {
-			s := app.currentInput.String()
-			if len(s) > 0 {
-				app.currentInput.Reset()
-				app.currentInput.WriteString(s[:len(s)-1])
-			}
-		} else if ch >= 32 && ch < 127 {
-			app.currentInput.WriteRune(ch)
+func (a *App) startSSHMonitor() {
+	go func() {
+		for {
+			time.Sleep(2 * time.Second)
+			a.scanForSSHProcesses()
 		}
-	}
-	app.mu.Unlock()
+	}()
+}
 
-	if cmdToCheck != "" {
-		go app.checkForSSHCommand(cmdToCheck)
+func (a *App) scanForSSHProcesses() {
+	if a.shellPid == 0 {
+		return
+	}
+
+	childPids := a.getChildPids(a.shellPid)
+	for _, pid := range childPids {
+		a.mu.Lock()
+		seen := a.seenSSHPids[pid]
+		a.mu.Unlock()
+
+		if seen {
+			continue
+		}
+
+		cmdline := a.getProcessCmdline(pid)
+		if cmdline == "" {
+			continue
+		}
+
+		parts := strings.Split(cmdline, "\x00")
+		if len(parts) == 0 {
+			continue
+		}
+
+		exe := filepath.Base(parts[0])
+		if exe != "ssh" {
+			continue
+		}
+
+		a.mu.Lock()
+		a.seenSSHPids[pid] = true
+		a.mu.Unlock()
+
+		host, sshUser, port := a.parseSSHArgs(parts)
+		if host == "" {
+			continue
+		}
+
+		a.addSSHHost(host, sshUser, port)
 	}
 }
 
-func (a *App) checkForSSHCommand(cmd string) {
-	matches := a.sshRegex.FindStringSubmatch(cmd)
-	if matches == nil {
-		return
+func (a *App) getChildPids(parentPid int) []int {
+	var children []int
+
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return children
 	}
 
-	var sshUser, host, port string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
 
-	if matches[1] != "" {
-		sshUser = matches[1]
-	} else {
-		currentUser, _ := user.Current()
-		sshUser = currentUser.Username
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+
+		statPath := fmt.Sprintf("/proc/%d/stat", pid)
+		data, err := os.ReadFile(statPath)
+		if err != nil {
+			continue
+		}
+
+		fields := strings.Fields(string(data))
+		if len(fields) < 4 {
+			continue
+		}
+
+		ppid, err := strconv.Atoi(fields[3])
+		if err != nil {
+			continue
+		}
+
+		if ppid == parentPid {
+			children = append(children, pid)
+			children = append(children, a.getChildPids(pid)...)
+		}
 	}
 
-	host = matches[2]
-	if host == "" {
-		return
+	return children
+}
+
+func (a *App) getProcessCmdline(pid int) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func (a *App) parseSSHArgs(args []string) (host, sshUser, port string) {
+	port = "22"
+	currentUser, _ := user.Current()
+	sshUser = currentUser.Username
+
+	skipNext := false
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if arg == "" {
+			continue
+		}
+
+		if skipNext {
+			skipNext = false
+			continue
+		}
+
+		if strings.HasPrefix(arg, "-") {
+			switch arg {
+			case "-p":
+				if i+1 < len(args) {
+					port = args[i+1]
+					skipNext = true
+				}
+			case "-l":
+				if i+1 < len(args) {
+					sshUser = args[i+1]
+					skipNext = true
+				}
+			case "-i", "-o", "-F", "-J", "-L", "-R", "-D", "-W", "-b", "-c", "-e", "-m", "-O", "-Q", "-S", "-w", "-E", "-B", "-I":
+				skipNext = true
+			}
+			continue
+		}
+
+		if strings.Contains(arg, "@") {
+			parts := strings.SplitN(arg, "@", 2)
+			sshUser = parts[0]
+			host = parts[1]
+		} else if host == "" {
+			host = arg
+		}
 	}
 
-	if len(matches) > 3 && matches[3] != "" {
-		port = matches[3]
-	} else {
-		port = "22"
+	if strings.Contains(host, ":") {
+		parts := strings.SplitN(host, ":", 2)
+		host = parts[0]
 	}
 
+	return host, sshUser, port
+}
+
+func (a *App) addSSHHost(host, sshUser, port string) {
 	a.mu.Lock()
 	for _, h := range a.hosts {
 		if h.Host == host && h.User == sshUser {
@@ -819,6 +919,57 @@ func (a *App) checkForSSHCommand(cmd string) {
 
 	a.saveHosts()
 	glib.IdleAdd(a.refreshHostList)
+}
+
+func (a *App) findShellPid() {
+	go func() {
+		for i := 0; i < 50; i++ {
+			time.Sleep(100 * time.Millisecond)
+			
+			entries, err := os.ReadDir("/proc")
+			if err != nil {
+				continue
+			}
+
+			myPid := os.Getpid()
+
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+
+				pid, err := strconv.Atoi(entry.Name())
+				if err != nil {
+					continue
+				}
+
+				statPath := fmt.Sprintf("/proc/%d/stat", pid)
+				data, err := os.ReadFile(statPath)
+				if err != nil {
+					continue
+				}
+
+				fields := strings.Fields(string(data))
+				if len(fields) < 4 {
+					continue
+				}
+
+				ppid, err := strconv.Atoi(fields[3])
+				if err != nil {
+					continue
+				}
+
+				if ppid == myPid {
+					cmdline := a.getProcessCmdline(pid)
+					if strings.Contains(cmdline, "sh") || strings.Contains(cmdline, "bash") || strings.Contains(cmdline, "zsh") || strings.Contains(cmdline, "fish") {
+						a.shellPid = pid
+						a.startSSHMonitor()
+						return
+					}
+				}
+			}
+		}
+	}()
 }
 
 func (a *App) showContextMenuAt() {
