@@ -7,15 +7,15 @@ package main
 #include <stdlib.h>
 
 extern void goCommitCallback(char *text, guint length);
-extern gboolean goButtonPressCallback(GdkEventButton *event);
+extern gboolean goButtonReleaseCallback(GdkEventButton *event);
 extern gboolean goKeyPressCallback(GdkEventKey *event);
 
 static void on_commit(VteTerminal *terminal, gchar *text, guint size, gpointer user_data) {
     goCommitCallback((char*)text, size);
 }
 
-static gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data) {
-    return goButtonPressCallback(event);
+static gboolean on_button_release(GtkWidget *widget, GdkEventButton *event, gpointer user_data) {
+    return goButtonReleaseCallback(event);
 }
 
 static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data) {
@@ -25,7 +25,7 @@ static gboolean on_key_press(GtkWidget *widget, GdkEventKey *event, gpointer use
 static GtkWidget* create_vte_terminal() {
     GtkWidget *term = vte_terminal_new();
     g_signal_connect(term, "commit", G_CALLBACK(on_commit), NULL);
-    g_signal_connect(term, "button-press-event", G_CALLBACK(on_button_press), NULL);
+    g_signal_connect(term, "button-release-event", G_CALLBACK(on_button_release), NULL);
     g_signal_connect(term, "key-press-event", G_CALLBACK(on_key_press), NULL);
     return term;
 }
@@ -105,6 +105,38 @@ static void vte_feed_child_text(VteTerminal *terminal, const char *text) {
     vte_terminal_feed_child(terminal, text, -1);
 }
 
+static void vte_set_cursor_shape(VteTerminal *terminal, int shape) {
+    vte_terminal_set_cursor_shape(terminal, (VteCursorShape)shape);
+}
+
+static void vte_set_cursor_blink(VteTerminal *terminal, int mode) {
+    vte_terminal_set_cursor_blink_mode(terminal, (VteCursorBlinkMode)mode);
+}
+
+static void vte_set_audible_bell(VteTerminal *terminal, gboolean enable) {
+    vte_terminal_set_audible_bell(terminal, enable);
+}
+
+static void vte_set_allow_hyperlink(VteTerminal *terminal, gboolean enable) {
+    vte_terminal_set_allow_hyperlink(terminal, enable);
+}
+
+static void vte_set_bold_is_bright(VteTerminal *terminal, gboolean enable) {
+    vte_terminal_set_bold_is_bright(terminal, enable);
+}
+
+static void vte_set_scroll_on_output(VteTerminal *terminal, gboolean enable) {
+    vte_terminal_set_scroll_on_output(terminal, enable);
+}
+
+static void vte_set_scroll_on_keystroke(VteTerminal *terminal, gboolean enable) {
+    vte_terminal_set_scroll_on_keystroke(terminal, enable);
+}
+
+static void vte_set_mouse_autohide(VteTerminal *terminal, gboolean enable) {
+    vte_terminal_set_mouse_autohide(terminal, enable);
+}
+
 static guint get_event_button(GdkEventButton *event) {
     return event->button;
 }
@@ -150,11 +182,19 @@ type SSHHost struct {
 }
 
 type Config struct {
-	Font       string `json:"font"`
-	FontSize   int    `json:"font_size"`
-	Foreground string `json:"foreground"`
-	Background string `json:"background"`
-	Scrollback int64  `json:"scrollback"`
+	Font            string `json:"font"`
+	FontSize        int    `json:"font_size"`
+	Foreground      string `json:"foreground"`
+	Background      string `json:"background"`
+	Scrollback      int64  `json:"scrollback"`
+	CursorShape     int    `json:"cursor_shape"`
+	CursorBlink     int    `json:"cursor_blink"`
+	AudibleBell     bool   `json:"audible_bell"`
+	AllowHyperlinks bool   `json:"allow_hyperlinks"`
+	BoldIsBright    bool   `json:"bold_is_bright"`
+	ScrollOnOutput  bool   `json:"scroll_on_output"`
+	ScrollOnKeystroke bool `json:"scroll_on_keystroke"`
+	MouseAutohide   bool   `json:"mouse_autohide"`
 }
 
 type App struct {
@@ -215,11 +255,19 @@ func (a *App) loadPaths() error {
 
 func (a *App) loadConfig() {
 	a.config = Config{
-		Font:       "Monospace",
-		FontSize:   12,
-		Foreground: "#D4D4D4",
-		Background: "#1E1E1E",
-		Scrollback: 10000,
+		Font:              "Monospace",
+		FontSize:          12,
+		Foreground:        "#D4D4D4",
+		Background:        "#1E1E1E",
+		Scrollback:        10000,
+		CursorShape:       0,
+		CursorBlink:       0,
+		AudibleBell:       false,
+		AllowHyperlinks:   true,
+		BoldIsBright:      true,
+		ScrollOnOutput:    false,
+		ScrollOnKeystroke: true,
+		MouseAutohide:     false,
 	}
 
 	data, err := os.ReadFile(a.configPath)
@@ -400,6 +448,21 @@ func (a *App) applyTerminalSettings() {
 	C.vte_set_colors(a.vte, cFg, cBg)
 
 	C.vte_set_scrollback(a.vte, C.glong(a.config.Scrollback))
+	C.vte_set_cursor_shape(a.vte, C.int(a.config.CursorShape))
+	C.vte_set_cursor_blink(a.vte, C.int(a.config.CursorBlink))
+	C.vte_set_audible_bell(a.vte, boolToGboolean(a.config.AudibleBell))
+	C.vte_set_allow_hyperlink(a.vte, boolToGboolean(a.config.AllowHyperlinks))
+	C.vte_set_bold_is_bright(a.vte, boolToGboolean(a.config.BoldIsBright))
+	C.vte_set_scroll_on_output(a.vte, boolToGboolean(a.config.ScrollOnOutput))
+	C.vte_set_scroll_on_keystroke(a.vte, boolToGboolean(a.config.ScrollOnKeystroke))
+	C.vte_set_mouse_autohide(a.vte, boolToGboolean(a.config.MouseAutohide))
+}
+
+func boolToGboolean(b bool) C.gboolean {
+	if b {
+		return C.TRUE
+	}
+	return C.FALSE
 }
 
 func (a *App) refreshHostList() {
@@ -651,13 +714,11 @@ func (a *App) showAddHostDialog() {
 	dialog.Destroy()
 }
 
-//export goButtonPressCallback
-func goButtonPressCallback(event *C.GdkEventButton) C.gboolean {
+//export goButtonReleaseCallback
+func goButtonReleaseCallback(event *C.GdkEventButton) C.gboolean {
 	button := C.get_event_button(event)
 	if button == 3 {
-		glib.IdleAdd(func() {
-			app.showContextMenuAt()
-		})
+		app.showContextMenuAt()
 		return C.TRUE
 	}
 	return C.FALSE
@@ -799,7 +860,7 @@ func (a *App) showSettingsDialog() {
 	dialog.SetTitle("Settings")
 	dialog.AddButton("Cancel", gtk.RESPONSE_CANCEL)
 	dialog.AddButton("Apply", gtk.RESPONSE_OK)
-	dialog.SetDefaultSize(450, 350)
+	dialog.SetDefaultSize(500, 450)
 
 	contentArea, _ := dialog.GetContentArea()
 	contentArea.SetMarginStart(20)
@@ -812,55 +873,115 @@ func (a *App) showSettingsDialog() {
 
 	appearanceGrid, _ := gtk.GridNew()
 	appearanceGrid.SetColumnSpacing(12)
-	appearanceGrid.SetRowSpacing(12)
+	appearanceGrid.SetRowSpacing(10)
 	appearanceGrid.SetMarginStart(12)
 	appearanceGrid.SetMarginEnd(12)
 	appearanceGrid.SetMarginTop(12)
+
+	row := 0
 
 	fontLabel, _ := gtk.LabelNew("Font Family:")
 	fontLabel.SetHAlign(gtk.ALIGN_END)
 	fontEntry, _ := gtk.EntryNew()
 	fontEntry.SetText(a.config.Font)
-	appearanceGrid.Attach(fontLabel, 0, 0, 1, 1)
-	appearanceGrid.Attach(fontEntry, 1, 0, 1, 1)
+	fontEntry.SetHExpand(true)
+	appearanceGrid.Attach(fontLabel, 0, row, 1, 1)
+	appearanceGrid.Attach(fontEntry, 1, row, 1, 1)
+	row++
 
 	sizeLabel, _ := gtk.LabelNew("Font Size:")
 	sizeLabel.SetHAlign(gtk.ALIGN_END)
 	sizeAdj, _ := gtk.AdjustmentNew(float64(a.config.FontSize), 6, 72, 1, 4, 0)
 	sizeSpin, _ := gtk.SpinButtonNew(sizeAdj, 1, 0)
-	appearanceGrid.Attach(sizeLabel, 0, 1, 1, 1)
-	appearanceGrid.Attach(sizeSpin, 1, 1, 1, 1)
+	appearanceGrid.Attach(sizeLabel, 0, row, 1, 1)
+	appearanceGrid.Attach(sizeSpin, 1, row, 1, 1)
+	row++
 
 	fgLabel, _ := gtk.LabelNew("Foreground:")
 	fgLabel.SetHAlign(gtk.ALIGN_END)
 	fgBtn, _ := gtk.ColorButtonNew()
 	fgBtn.SetTitle("Foreground Color")
-	appearanceGrid.Attach(fgLabel, 0, 2, 1, 1)
-	appearanceGrid.Attach(fgBtn, 1, 2, 1, 1)
+	appearanceGrid.Attach(fgLabel, 0, row, 1, 1)
+	appearanceGrid.Attach(fgBtn, 1, row, 1, 1)
+	row++
 
 	bgLabel, _ := gtk.LabelNew("Background:")
 	bgLabel.SetHAlign(gtk.ALIGN_END)
 	bgBtn, _ := gtk.ColorButtonNew()
 	bgBtn.SetTitle("Background Color")
-	appearanceGrid.Attach(bgLabel, 0, 3, 1, 1)
-	appearanceGrid.Attach(bgBtn, 1, 3, 1, 1)
+	appearanceGrid.Attach(bgLabel, 0, row, 1, 1)
+	appearanceGrid.Attach(bgBtn, 1, row, 1, 1)
+	row++
+
+	cursorShapeLabel, _ := gtk.LabelNew("Cursor Shape:")
+	cursorShapeLabel.SetHAlign(gtk.ALIGN_END)
+	cursorShapeCombo, _ := gtk.ComboBoxTextNew()
+	cursorShapeCombo.AppendText("Block")
+	cursorShapeCombo.AppendText("I-Beam")
+	cursorShapeCombo.AppendText("Underline")
+	cursorShapeCombo.SetActive(a.config.CursorShape)
+	appearanceGrid.Attach(cursorShapeLabel, 0, row, 1, 1)
+	appearanceGrid.Attach(cursorShapeCombo, 1, row, 1, 1)
+	row++
+
+	cursorBlinkLabel, _ := gtk.LabelNew("Cursor Blink:")
+	cursorBlinkLabel.SetHAlign(gtk.ALIGN_END)
+	cursorBlinkCombo, _ := gtk.ComboBoxTextNew()
+	cursorBlinkCombo.AppendText("System Default")
+	cursorBlinkCombo.AppendText("On")
+	cursorBlinkCombo.AppendText("Off")
+	cursorBlinkCombo.SetActive(a.config.CursorBlink)
+	appearanceGrid.Attach(cursorBlinkLabel, 0, row, 1, 1)
+	appearanceGrid.Attach(cursorBlinkCombo, 1, row, 1, 1)
 
 	appearanceLabel, _ := gtk.LabelNew("Appearance")
 	notebook.AppendPage(appearanceGrid, appearanceLabel)
 
 	terminalGrid, _ := gtk.GridNew()
 	terminalGrid.SetColumnSpacing(12)
-	terminalGrid.SetRowSpacing(12)
+	terminalGrid.SetRowSpacing(10)
 	terminalGrid.SetMarginStart(12)
 	terminalGrid.SetMarginEnd(12)
 	terminalGrid.SetMarginTop(12)
+
+	row = 0
 
 	scrollLabel, _ := gtk.LabelNew("Scrollback Lines:")
 	scrollLabel.SetHAlign(gtk.ALIGN_END)
 	scrollAdj, _ := gtk.AdjustmentNew(float64(a.config.Scrollback), 100, 1000000, 100, 1000, 0)
 	scrollSpin, _ := gtk.SpinButtonNew(scrollAdj, 100, 0)
-	terminalGrid.Attach(scrollLabel, 0, 0, 1, 1)
-	terminalGrid.Attach(scrollSpin, 1, 0, 1, 1)
+	terminalGrid.Attach(scrollLabel, 0, row, 1, 1)
+	terminalGrid.Attach(scrollSpin, 1, row, 1, 1)
+	row++
+
+	scrollOnOutputCheck, _ := gtk.CheckButtonNewWithLabel("Scroll on output")
+	scrollOnOutputCheck.SetActive(a.config.ScrollOnOutput)
+	terminalGrid.Attach(scrollOnOutputCheck, 0, row, 2, 1)
+	row++
+
+	scrollOnKeystrokeCheck, _ := gtk.CheckButtonNewWithLabel("Scroll on keystroke")
+	scrollOnKeystrokeCheck.SetActive(a.config.ScrollOnKeystroke)
+	terminalGrid.Attach(scrollOnKeystrokeCheck, 0, row, 2, 1)
+	row++
+
+	audibleBellCheck, _ := gtk.CheckButtonNewWithLabel("Audible bell")
+	audibleBellCheck.SetActive(a.config.AudibleBell)
+	terminalGrid.Attach(audibleBellCheck, 0, row, 2, 1)
+	row++
+
+	allowHyperlinksCheck, _ := gtk.CheckButtonNewWithLabel("Allow hyperlinks")
+	allowHyperlinksCheck.SetActive(a.config.AllowHyperlinks)
+	terminalGrid.Attach(allowHyperlinksCheck, 0, row, 2, 1)
+	row++
+
+	boldIsBrightCheck, _ := gtk.CheckButtonNewWithLabel("Bold is bright")
+	boldIsBrightCheck.SetActive(a.config.BoldIsBright)
+	terminalGrid.Attach(boldIsBrightCheck, 0, row, 2, 1)
+	row++
+
+	mouseAutohideCheck, _ := gtk.CheckButtonNewWithLabel("Hide mouse cursor when typing")
+	mouseAutohideCheck.SetActive(a.config.MouseAutohide)
+	terminalGrid.Attach(mouseAutohideCheck, 0, row, 2, 1)
 
 	terminalLabel, _ := gtk.LabelNew("Terminal")
 	notebook.AppendPage(terminalGrid, terminalLabel)
@@ -886,6 +1007,15 @@ func (a *App) showSettingsDialog() {
 			int(bgRGBA.GetRed()*255),
 			int(bgRGBA.GetGreen()*255),
 			int(bgRGBA.GetBlue()*255))
+
+		a.config.CursorShape = cursorShapeCombo.GetActive()
+		a.config.CursorBlink = cursorBlinkCombo.GetActive()
+		a.config.ScrollOnOutput = scrollOnOutputCheck.GetActive()
+		a.config.ScrollOnKeystroke = scrollOnKeystrokeCheck.GetActive()
+		a.config.AudibleBell = audibleBellCheck.GetActive()
+		a.config.AllowHyperlinks = allowHyperlinksCheck.GetActive()
+		a.config.BoldIsBright = boldIsBrightCheck.GetActive()
+		a.config.MouseAutohide = mouseAutohideCheck.GetActive()
 
 		a.saveConfig()
 		a.applyTerminalSettings()
