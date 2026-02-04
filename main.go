@@ -181,6 +181,221 @@ import (
 	"github.com/gotk3/gotk3/gtk"
 )
 
+type ColorPreset struct {
+	Name        string
+	Foreground  string
+	Background  string
+	CursorColor string
+	Palette     []string
+}
+
+var colorPresets = []ColorPreset{
+	{
+		Name:        "Catppuccin Mocha",
+		Foreground:  "#CDD6F4",
+		Background:  "#1E1E2E",
+		CursorColor: "#F5E0DC",
+		Palette: []string{
+			"#45475A", "#F38BA8", "#A6E3A1", "#F9E2AF",
+			"#89B4FA", "#F5C2E7", "#94E2D5", "#BAC2DE",
+			"#585B70", "#F38BA8", "#A6E3A1", "#F9E2AF",
+			"#89B4FA", "#F5C2E7", "#94E2D5", "#A6ADC8",
+		},
+	},
+	{
+		Name:        "Catppuccin Latte",
+		Foreground:  "#4C4F69",
+		Background:  "#EFF1F5",
+		CursorColor: "#DC8A78",
+		Palette: []string{
+			"#5C5F77", "#D20F39", "#40A02B", "#DF8E1D",
+			"#1E66F5", "#EA76CB", "#179299", "#ACB0BE",
+			"#6C6F85", "#D20F39", "#40A02B", "#DF8E1D",
+			"#1E66F5", "#EA76CB", "#179299", "#BCC0CC",
+		},
+	},
+	{
+		Name:        "GNOME Terminal",
+		Foreground:  "#D3D7CF",
+		Background:  "#2E3436",
+		CursorColor: "#D3D7CF",
+		Palette: []string{
+			"#2E3436", "#CC0000", "#4E9A06", "#C4A000",
+			"#3465A4", "#75507B", "#06989A", "#D3D7CF",
+			"#555753", "#EF2929", "#8AE234", "#FCE94F",
+			"#729FCF", "#AD7FA8", "#34E2E2", "#EEEEEC",
+		},
+	},
+	{
+		Name:        "XTerm",
+		Foreground:  "#FFFFFF",
+		Background:  "#000000",
+		CursorColor: "#FFFFFF",
+		Palette: []string{
+			"#000000", "#CD0000", "#00CD00", "#CDCD00",
+			"#0000EE", "#CD00CD", "#00CDCD", "#E5E5E5",
+			"#7F7F7F", "#FF0000", "#00FF00", "#FFFF00",
+			"#5C5CFF", "#FF00FF", "#00FFFF", "#FFFFFF",
+		},
+	},
+	{
+		Name:        "Solarized Dark",
+		Foreground:  "#839496",
+		Background:  "#002B36",
+		CursorColor: "#839496",
+		Palette: []string{
+			"#073642", "#DC322F", "#859900", "#B58900",
+			"#268BD2", "#D33682", "#2AA198", "#EEE8D5",
+			"#002B36", "#CB4B16", "#586E75", "#657B83",
+			"#839496", "#6C71C4", "#93A1A1", "#FDF6E3",
+		},
+	},
+	{
+		Name:        "Solarized Light",
+		Foreground:  "#657B83",
+		Background:  "#FDF6E3",
+		CursorColor: "#657B83",
+		Palette: []string{
+			"#073642", "#DC322F", "#859900", "#B58900",
+			"#268BD2", "#D33682", "#2AA198", "#EEE8D5",
+			"#002B36", "#CB4B16", "#586E75", "#657B83",
+			"#839496", "#6C71C4", "#93A1A1", "#FDF6E3",
+		},
+	},
+	{
+		Name:        "Dracula",
+		Foreground:  "#F8F8F2",
+		Background:  "#282A36",
+		CursorColor: "#F8F8F2",
+		Palette: []string{
+			"#21222C", "#FF5555", "#50FA7B", "#F1FA8C",
+			"#BD93F9", "#FF79C6", "#8BE9FD", "#F8F8F2",
+			"#6272A4", "#FF6E6E", "#69FF94", "#FFFFA5",
+			"#D6ACFF", "#FF92DF", "#A4FFFF", "#FFFFFF",
+		},
+	},
+	{
+		Name:        "Nord",
+		Foreground:  "#D8DEE9",
+		Background:  "#2E3440",
+		CursorColor: "#D8DEE9",
+		Palette: []string{
+			"#3B4252", "#BF616A", "#A3BE8C", "#EBCB8B",
+			"#81A1C1", "#B48EAD", "#88C0D0", "#E5E9F0",
+			"#4C566A", "#BF616A", "#A3BE8C", "#EBCB8B",
+			"#81A1C1", "#B48EAD", "#8FBCBB", "#ECEFF4",
+		},
+	},
+	{
+		Name:        "Gruvbox Dark",
+		Foreground:  "#EBDBB2",
+		Background:  "#282828",
+		CursorColor: "#EBDBB2",
+		Palette: []string{
+			"#282828", "#CC241D", "#98971A", "#D79921",
+			"#458588", "#B16286", "#689D6A", "#A89984",
+			"#928374", "#FB4934", "#B8BB26", "#FABD2F",
+			"#83A598", "#D3869B", "#8EC07C", "#EBDBB2",
+		},
+	},
+	{
+		Name:        "Tokyo Night",
+		Foreground:  "#A9B1D6",
+		Background:  "#1A1B26",
+		CursorColor: "#C0CAF5",
+		Palette: []string{
+			"#15161E", "#F7768E", "#9ECE6A", "#E0AF68",
+			"#7AA2F7", "#BB9AF7", "#7DCFFF", "#A9B1D6",
+			"#414868", "#F7768E", "#9ECE6A", "#E0AF68",
+			"#7AA2F7", "#BB9AF7", "#7DCFFF", "#C0CAF5",
+		},
+	},
+	{
+		Name:        "One Dark",
+		Foreground:  "#ABB2BF",
+		Background:  "#282C34",
+		CursorColor: "#528BFF",
+		Palette: []string{
+			"#282C34", "#E06C75", "#98C379", "#E5C07B",
+			"#61AFEF", "#C678DD", "#56B6C2", "#ABB2BF",
+			"#545862", "#E06C75", "#98C379", "#E5C07B",
+			"#61AFEF", "#C678DD", "#56B6C2", "#C8CCD4",
+		},
+	},
+	{
+		Name:        "Matrix",
+		Foreground:  "#00FF00",
+		Background:  "#000000",
+		CursorColor: "#00FF00",
+		Palette: []string{
+			"#000000", "#008000", "#00B800", "#00D800",
+			"#003000", "#005000", "#007000", "#00FF00",
+			"#003000", "#00A000", "#00C000", "#00E000",
+			"#004000", "#006000", "#008000", "#00FF00",
+		},
+	},
+	{
+		Name:        "Pastel",
+		Foreground:  "#4A4A4A",
+		Background:  "#F5F5F5",
+		CursorColor: "#4A4A4A",
+		Palette: []string{
+			"#4A4A4A", "#E57373", "#81C784", "#FFD54F",
+			"#64B5F6", "#BA68C8", "#4DD0E1", "#F5F5F5",
+			"#757575", "#EF9A9A", "#A5D6A7", "#FFE082",
+			"#90CAF9", "#CE93D8", "#80DEEA", "#FFFFFF",
+		},
+	},
+	{
+		Name:        "White on Black",
+		Foreground:  "#FFFFFF",
+		Background:  "#000000",
+		CursorColor: "#FFFFFF",
+		Palette: []string{
+			"#000000", "#AA0000", "#00AA00", "#AA5500",
+			"#0000AA", "#AA00AA", "#00AAAA", "#AAAAAA",
+			"#555555", "#FF5555", "#55FF55", "#FFFF55",
+			"#5555FF", "#FF55FF", "#55FFFF", "#FFFFFF",
+		},
+	},
+	{
+		Name:        "Black on White",
+		Foreground:  "#000000",
+		Background:  "#FFFFFF",
+		CursorColor: "#000000",
+		Palette: []string{
+			"#000000", "#AA0000", "#00AA00", "#AA5500",
+			"#0000AA", "#AA00AA", "#00AAAA", "#AAAAAA",
+			"#555555", "#FF5555", "#55FF55", "#FFFF55",
+			"#5555FF", "#FF55FF", "#55FFFF", "#FFFFFF",
+		},
+	},
+	{
+		Name:        "Monokai",
+		Foreground:  "#F8F8F2",
+		Background:  "#272822",
+		CursorColor: "#F8F8F2",
+		Palette: []string{
+			"#272822", "#F92672", "#A6E22E", "#F4BF75",
+			"#66D9EF", "#AE81FF", "#A1EFE4", "#F8F8F2",
+			"#75715E", "#F92672", "#A6E22E", "#F4BF75",
+			"#66D9EF", "#AE81FF", "#A1EFE4", "#F9F8F5",
+		},
+	},
+	{
+		Name:        "Cyberpunk",
+		Foreground:  "#00FFFF",
+		Background:  "#0D0221",
+		CursorColor: "#FF00FF",
+		Palette: []string{
+			"#0D0221", "#FF2A6D", "#05D9E8", "#D1F7FF",
+			"#7B00FF", "#FF00FF", "#01C4E7", "#00FFFF",
+			"#1A1A2E", "#FF6B9D", "#65FCEB", "#F5FEFD",
+			"#9D4EDD", "#FF69EB", "#01E5F7", "#FFFFFF",
+		},
+	},
+}
+
 type SSHHost struct {
 	Name     string `json:"name"`
 	Host     string `json:"host"`
@@ -1238,6 +1453,18 @@ func (a *App) showSettingsDialog() {
 	appearanceGrid.Attach(fontBtn, 1, row, 1, 1)
 	row++
 
+	presetLabel, _ := gtk.LabelNew("Color Preset:")
+	presetLabel.SetHAlign(gtk.ALIGN_END)
+	presetCombo, _ := gtk.ComboBoxTextNew()
+	presetCombo.AppendText("Custom")
+	for _, preset := range colorPresets {
+		presetCombo.AppendText(preset.Name)
+	}
+	presetCombo.SetActive(0)
+	appearanceGrid.Attach(presetLabel, 0, row, 1, 1)
+	appearanceGrid.Attach(presetCombo, 1, row, 1, 1)
+	row++
+
 	fgLabel, _ := gtk.LabelNew("Foreground:")
 	fgLabel.SetHAlign(gtk.ALIGN_END)
 	fgBtn, _ := gtk.ColorButtonNew()
@@ -1303,6 +1530,19 @@ func (a *App) showSettingsDialog() {
 		paletteButtons[i] = btn
 		paletteGrid.Attach(btn, i%8, i/8, 1, 1)
 	}
+
+	presetCombo.Connect("changed", func() {
+		idx := presetCombo.GetActive()
+		if idx > 0 && idx <= len(colorPresets) {
+			preset := colorPresets[idx-1]
+			a.setColorButtonFromHex(fgBtn, preset.Foreground)
+			a.setColorButtonFromHex(bgBtn, preset.Background)
+			a.setColorButtonFromHex(cursorColorBtn, preset.CursorColor)
+			for i := 0; i < 16 && i < len(preset.Palette); i++ {
+				a.setColorButtonFromHex(paletteButtons[i], preset.Palette[i])
+			}
+		}
+	})
 	appearanceGrid.Attach(paletteLabel, 0, row, 1, 1)
 	appearanceGrid.Attach(paletteGrid, 1, row, 1, 1)
 
