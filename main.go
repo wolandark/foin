@@ -217,17 +217,20 @@ type TerminalTab struct {
 }
 
 type App struct {
-	window      *gtk.Window
-	notebook    *gtk.Notebook
-	tabs        []*TerminalTab
-	activeTab   int
-	hostList    *gtk.ListBox
-	hosts       []SSHHost
-	config      Config
-	configPath  string
-	hostsPath   string
-	mu          sync.Mutex
-	seenSSHPids map[int]bool
+	window        *gtk.Window
+	notebook      *gtk.Notebook
+	sidebar       *gtk.Box
+	sidebarBtn    *gtk.ToggleButton
+	tabs          []*TerminalTab
+	activeTab     int
+	hostList      *gtk.ListBox
+	hosts         []SSHHost
+	config        Config
+	configPath    string
+	hostsPath     string
+	mu            sync.Mutex
+	seenSSHPids   map[int]bool
+	sidebarVisible bool
 }
 
 var app *App
@@ -342,10 +345,11 @@ func (a *App) createUI() error {
 
 	mainBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 0)
 
-	sidebar, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
-	sidebar.SetSizeRequest(220, -1)
+	a.sidebar, _ = gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
+	a.sidebar.SetSizeRequest(220, -1)
+	a.sidebarVisible = true
 
-	sidebarStyle, _ := sidebar.GetStyleContext()
+	sidebarStyle, _ := a.sidebar.GetStyleContext()
 	cssProvider, _ := gtk.CssProviderNew()
 	cssProvider.LoadFromData(`
 		.sidebar {
@@ -435,7 +439,7 @@ func (a *App) createUI() error {
 	addButton.Connect("clicked", a.showAddHostDialog)
 	headerBox.PackEnd(addButton, false, false, 0)
 
-	sidebar.PackStart(headerBox, false, false, 0)
+	a.sidebar.PackStart(headerBox, false, false, 0)
 
 	scrolled, _ := gtk.ScrolledWindowNew(nil, nil)
 	scrolled.SetPolicy(gtk.POLICY_NEVER, gtk.POLICY_AUTOMATIC)
@@ -445,8 +449,8 @@ func (a *App) createUI() error {
 	a.hostList.Connect("row-activated", a.onHostActivated)
 	scrolled.Add(a.hostList)
 
-	sidebar.PackStart(scrolled, true, true, 0)
-	mainBox.PackStart(sidebar, false, false, 0)
+	a.sidebar.PackStart(scrolled, true, true, 0)
+	mainBox.PackStart(a.sidebar, false, false, 0)
 
 	termBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
 
@@ -459,12 +463,29 @@ func (a *App) createUI() error {
 
 	a.addNewTab()
 
+	actionBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 4)
+
+	a.sidebarBtn, _ = gtk.ToggleButtonNew()
+	sidebarIcon, _ := gtk.ImageNewFromIconName("view-sidebar-symbolic", gtk.ICON_SIZE_MENU)
+	a.sidebarBtn.SetImage(sidebarIcon)
+	a.sidebarBtn.SetRelief(gtk.RELIEF_NONE)
+	a.sidebarBtn.SetActive(true)
+	a.sidebarBtn.SetTooltipText("Toggle SSH Panel (Ctrl+Shift+B)")
+	a.sidebarBtn.Connect("toggled", func() {
+		a.toggleSidebar()
+	})
+	actionBox.PackStart(a.sidebarBtn, false, false, 0)
+
 	newTabBtn, _ := gtk.ButtonNewFromIconName("tab-new-symbolic", gtk.ICON_SIZE_MENU)
 	newTabBtn.SetRelief(gtk.RELIEF_NONE)
+	newTabBtn.SetTooltipText("New Tab (Ctrl+Shift+T)")
 	newTabBtn.Connect("clicked", func() {
 		a.addNewTab()
 	})
-	a.notebook.SetActionWidget(newTabBtn, gtk.PACK_END)
+	actionBox.PackStart(newTabBtn, false, false, 0)
+	actionBox.ShowAll()
+
+	a.notebook.SetActionWidget(actionBox, gtk.PACK_END)
 
 	termBox.PackStart(a.notebook, true, true, 0)
 	mainBox.PackStart(termBox, true, true, 0)
@@ -541,6 +562,16 @@ func (a *App) getCurrentTab() *TerminalTab {
 		return a.tabs[0]
 	}
 	return nil
+}
+
+func (a *App) toggleSidebar() {
+	a.sidebarVisible = !a.sidebarVisible
+	if a.sidebarVisible {
+		a.sidebar.Show()
+	} else {
+		a.sidebar.Hide()
+	}
+	a.sidebarBtn.SetActive(a.sidebarVisible)
 }
 
 func (a *App) applyTerminalSettings() {
@@ -877,6 +908,16 @@ func goKeyPressCallback(event *C.GdkEventKey) C.gboolean {
 		case C.guint(gdk.KEY_T):
 			glib.IdleAdd(func() {
 				app.addNewTab()
+			})
+			return C.TRUE
+		case C.guint(gdk.KEY_B):
+			glib.IdleAdd(func() {
+				app.toggleSidebar()
+			})
+			return C.TRUE
+		case C.guint(gdk.KEY_W):
+			glib.IdleAdd(func() {
+				app.closeTab(app.activeTab)
 			})
 			return C.TRUE
 		}
