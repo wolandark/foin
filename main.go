@@ -72,11 +72,26 @@ static void vte_set_font_from_string(VteTerminal *terminal, const char *font_des
     pango_font_description_free(font);
 }
 
-static void vte_set_colors(VteTerminal *terminal, const char *fg, const char *bg) {
-    GdkRGBA foreground, background;
+static void vte_set_colors_full(VteTerminal *terminal, const char *fg, const char *bg, const char *cursor, const char **palette, int palette_size) {
+    GdkRGBA foreground, background, cursor_color;
+    GdkRGBA colors[16];
+    
     gdk_rgba_parse(&foreground, fg);
     gdk_rgba_parse(&background, bg);
-    vte_terminal_set_colors(terminal, &foreground, &background, NULL, 0);
+    
+    if (cursor != NULL && strlen(cursor) > 0) {
+        gdk_rgba_parse(&cursor_color, cursor);
+        vte_terminal_set_color_cursor(terminal, &cursor_color);
+    }
+    
+    if (palette != NULL && palette_size == 16) {
+        for (int i = 0; i < 16; i++) {
+            gdk_rgba_parse(&colors[i], palette[i]);
+        }
+        vte_terminal_set_colors(terminal, &foreground, &background, colors, 16);
+    } else {
+        vte_terminal_set_colors(terminal, &foreground, &background, NULL, 0);
+    }
 }
 
 static void vte_set_scrollback(VteTerminal *terminal, glong lines) {
@@ -177,32 +192,41 @@ type SSHHost struct {
 }
 
 type Config struct {
-	Font            string `json:"font"`
-	FontSize        int    `json:"font_size"`
-	Foreground      string `json:"foreground"`
-	Background      string `json:"background"`
-	Scrollback      int64  `json:"scrollback"`
-	CursorShape     int    `json:"cursor_shape"`
-	CursorBlink     int    `json:"cursor_blink"`
-	AudibleBell     bool   `json:"audible_bell"`
-	AllowHyperlinks bool   `json:"allow_hyperlinks"`
-	BoldIsBright    bool   `json:"bold_is_bright"`
-	ScrollOnOutput  bool   `json:"scroll_on_output"`
-	ScrollOnKeystroke bool `json:"scroll_on_keystroke"`
-	MouseAutohide   bool   `json:"mouse_autohide"`
+	Font              string   `json:"font"`
+	FontSize          int      `json:"font_size"`
+	Foreground        string   `json:"foreground"`
+	Background        string   `json:"background"`
+	CursorColor       string   `json:"cursor_color"`
+	Palette           []string `json:"palette"`
+	Scrollback        int64    `json:"scrollback"`
+	CursorShape       int      `json:"cursor_shape"`
+	CursorBlink       int      `json:"cursor_blink"`
+	AudibleBell       bool     `json:"audible_bell"`
+	VisualBell        bool     `json:"visual_bell"`
+	AllowHyperlinks   bool     `json:"allow_hyperlinks"`
+	BoldIsBright      bool     `json:"bold_is_bright"`
+	ScrollOnOutput    bool     `json:"scroll_on_output"`
+	ScrollOnKeystroke bool     `json:"scroll_on_keystroke"`
+	MouseAutohide     bool     `json:"mouse_autohide"`
+}
+
+type TerminalTab struct {
+	widget   *C.GtkWidget
+	vte      *C.VteTerminal
+	shellPid int
 }
 
 type App struct {
 	window      *gtk.Window
-	terminal    *C.GtkWidget
-	vte         *C.VteTerminal
+	notebook    *gtk.Notebook
+	tabs        []*TerminalTab
+	activeTab   int
 	hostList    *gtk.ListBox
 	hosts       []SSHHost
 	config      Config
 	configPath  string
 	hostsPath   string
 	mu          sync.Mutex
-	shellPid    int
 	seenSSHPids map[int]bool
 }
 
@@ -250,14 +274,22 @@ func (a *App) loadPaths() error {
 
 func (a *App) loadConfig() {
 	a.config = Config{
-		Font:              "Monospace",
-		FontSize:          12,
-		Foreground:        "#D4D4D4",
-		Background:        "#1E1E1E",
+		Font:       "JetBrains Mono",
+		FontSize:   11,
+		Foreground: "#CDD6F4",
+		Background: "#1E1E2E",
+		CursorColor: "#F5E0DC",
+		Palette: []string{
+			"#45475A", "#F38BA8", "#A6E3A1", "#F9E2AF",
+			"#89B4FA", "#F5C2E7", "#94E2D5", "#BAC2DE",
+			"#585B70", "#F38BA8", "#A6E3A1", "#F9E2AF",
+			"#89B4FA", "#F5C2E7", "#94E2D5", "#A6ADC8",
+		},
 		Scrollback:        10000,
 		CursorShape:       0,
 		CursorBlink:       0,
 		AudibleBell:       false,
+		VisualBell:        false,
 		AllowHyperlinks:   true,
 		BoldIsBright:      true,
 		ScrollOnOutput:    false,
@@ -317,52 +349,52 @@ func (a *App) createUI() error {
 	cssProvider, _ := gtk.CssProviderNew()
 	cssProvider.LoadFromData(`
 		.sidebar {
-			background-color: #252526;
-			border-right: 1px solid #3C3C3C;
+			background-color: #181825;
+			border-right: 1px solid #313244;
 		}
 		.sidebar-header {
-			background-color: #2D2D30;
+			background-color: #1E1E2E;
 			padding: 8px 12px;
-			border-bottom: 1px solid #3C3C3C;
+			border-bottom: 1px solid #313244;
 		}
 		.sidebar-header label {
-			color: #CCCCCC;
+			color: #CDD6F4;
 			font-weight: bold;
 			font-size: 13px;
 		}
 		.add-button {
 			background: transparent;
 			border: none;
-			color: #4EC9B0;
+			color: #94E2D5;
 			min-width: 28px;
 			min-height: 28px;
 			padding: 0;
 		}
 		.add-button:hover {
-			background-color: #3C3C3C;
+			background-color: #313244;
 		}
 		.host-row {
 			padding: 8px 12px;
-			border-bottom: 1px solid #2D2D30;
+			border-bottom: 1px solid #181825;
 		}
 		.host-row:hover {
-			background-color: #2A2D2E;
+			background-color: #313244;
 		}
 		.host-row:selected {
-			background-color: #094771;
+			background-color: #45475A;
 		}
 		.host-name {
-			color: #4EC9B0;
+			color: #89B4FA;
 			font-weight: 500;
 		}
 		.host-detail {
-			color: #808080;
+			color: #6C7086;
 			font-size: 11px;
 		}
 		.delete-btn {
 			background: transparent;
 			border: none;
-			color: #F14C4C;
+			color: #F38BA8;
 			min-width: 20px;
 			min-height: 20px;
 			padding: 2px;
@@ -370,7 +402,20 @@ func (a *App) createUI() error {
 		}
 		.delete-btn:hover {
 			opacity: 1;
-			background-color: rgba(241, 76, 76, 0.2);
+			background-color: rgba(243, 139, 168, 0.2);
+		}
+		notebook > header {
+			background-color: #1E1E2E;
+		}
+		notebook > header tab {
+			background-color: #181825;
+			color: #BAC2DE;
+			padding: 4px 8px;
+			border: none;
+		}
+		notebook > header tab:checked {
+			background-color: #313244;
+			color: #CDD6F4;
 		}
 	`)
 	screen, _ := gdk.ScreenGetDefault()
@@ -405,25 +450,23 @@ func (a *App) createUI() error {
 
 	termBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 0)
 
-	a.terminal = C.create_vte_terminal()
-	a.vte = (*C.VteTerminal)(unsafe.Pointer(a.terminal))
+	a.notebook, _ = gtk.NotebookNew()
+	a.notebook.SetScrollable(true)
+	a.notebook.SetShowBorder(false)
+	a.notebook.Connect("switch-page", func(nb *gtk.Notebook, page *gtk.Widget, pageNum uint) {
+		a.activeTab = int(pageNum)
+	})
 
-	termWidget := glib.Take(unsafe.Pointer(a.terminal))
-	termGtk := &gtk.Widget{glib.InitiallyUnowned{termWidget}}
+	a.addNewTab()
 
-	a.applyTerminalSettings()
+	newTabBtn, _ := gtk.ButtonNewFromIconName("tab-new-symbolic", gtk.ICON_SIZE_MENU)
+	newTabBtn.SetRelief(gtk.RELIEF_NONE)
+	newTabBtn.Connect("clicked", func() {
+		a.addNewTab()
+	})
+	a.notebook.SetActionWidget(newTabBtn, gtk.PACK_END)
 
-	homeDir, _ := os.UserHomeDir()
-	cHomeDir := C.CString(homeDir)
-	defer C.free(unsafe.Pointer(cHomeDir))
-	C.vte_spawn_shell(a.vte, cHomeDir)
-
-	a.findShellPid()
-
-	termGtk.SetHExpand(true)
-	termGtk.SetVExpand(true)
-	termBox.PackStart(termGtk, true, true, 0)
-
+	termBox.PackStart(a.notebook, true, true, 0)
 	mainBox.PackStart(termBox, true, true, 0)
 
 	a.window.Add(mainBox)
@@ -432,27 +475,113 @@ func (a *App) createUI() error {
 	return nil
 }
 
+func (a *App) addNewTab() {
+	terminal := C.create_vte_terminal()
+	vte := (*C.VteTerminal)(unsafe.Pointer(terminal))
+
+	tab := &TerminalTab{
+		widget: terminal,
+		vte:    vte,
+	}
+	a.tabs = append(a.tabs, tab)
+
+	termWidget := glib.Take(unsafe.Pointer(terminal))
+	termGtk := &gtk.Widget{glib.InitiallyUnowned{termWidget}}
+	termGtk.SetHExpand(true)
+	termGtk.SetVExpand(true)
+
+	a.applySettingsToTerminal(vte)
+
+	homeDir, _ := os.UserHomeDir()
+	cHomeDir := C.CString(homeDir)
+	C.vte_spawn_shell(vte, cHomeDir)
+	C.free(unsafe.Pointer(cHomeDir))
+
+	tabNum := len(a.tabs)
+	labelBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 4)
+	label, _ := gtk.LabelNew(fmt.Sprintf("Terminal %d", tabNum))
+	closeBtn, _ := gtk.ButtonNewFromIconName("window-close-symbolic", gtk.ICON_SIZE_MENU)
+	closeBtn.SetRelief(gtk.RELIEF_NONE)
+
+	tabIndex := tabNum - 1
+	closeBtn.Connect("clicked", func() {
+		a.closeTab(tabIndex)
+	})
+
+	labelBox.PackStart(label, true, true, 0)
+	labelBox.PackEnd(closeBtn, false, false, 0)
+	labelBox.ShowAll()
+
+	pageNum := a.notebook.AppendPage(termGtk, labelBox)
+	a.notebook.ShowAll()
+	a.notebook.SetCurrentPage(pageNum)
+
+	go a.findShellPidForTab(tab)
+}
+
+func (a *App) closeTab(index int) {
+	if len(a.tabs) <= 1 {
+		return
+	}
+
+	a.notebook.RemovePage(index)
+
+	a.mu.Lock()
+	if index < len(a.tabs) {
+		a.tabs = append(a.tabs[:index], a.tabs[index+1:]...)
+	}
+	a.mu.Unlock()
+}
+
+func (a *App) getCurrentTab() *TerminalTab {
+	if a.activeTab >= 0 && a.activeTab < len(a.tabs) {
+		return a.tabs[a.activeTab]
+	}
+	if len(a.tabs) > 0 {
+		return a.tabs[0]
+	}
+	return nil
+}
+
 func (a *App) applyTerminalSettings() {
+	for _, tab := range a.tabs {
+		a.applySettingsToTerminal(tab.vte)
+	}
+}
+
+func (a *App) applySettingsToTerminal(vte *C.VteTerminal) {
 	fontDesc := fmt.Sprintf("%s %d", a.config.Font, a.config.FontSize)
 	cFont := C.CString(fontDesc)
 	defer C.free(unsafe.Pointer(cFont))
-	C.vte_set_font_from_string(a.vte, cFont)
+	C.vte_set_font_from_string(vte, cFont)
 
 	cFg := C.CString(a.config.Foreground)
 	cBg := C.CString(a.config.Background)
+	cCursor := C.CString(a.config.CursorColor)
 	defer C.free(unsafe.Pointer(cFg))
 	defer C.free(unsafe.Pointer(cBg))
-	C.vte_set_colors(a.vte, cFg, cBg)
+	defer C.free(unsafe.Pointer(cCursor))
 
-	C.vte_set_scrollback(a.vte, C.glong(a.config.Scrollback))
-	C.vte_set_cursor_shape(a.vte, C.int(a.config.CursorShape))
-	C.vte_set_cursor_blink(a.vte, C.int(a.config.CursorBlink))
-	C.vte_set_audible_bell(a.vte, boolToGboolean(a.config.AudibleBell))
-	C.vte_set_allow_hyperlink(a.vte, boolToGboolean(a.config.AllowHyperlinks))
-	C.vte_set_bold_is_bright(a.vte, boolToGboolean(a.config.BoldIsBright))
-	C.vte_set_scroll_on_output(a.vte, boolToGboolean(a.config.ScrollOnOutput))
-	C.vte_set_scroll_on_keystroke(a.vte, boolToGboolean(a.config.ScrollOnKeystroke))
-	C.vte_set_mouse_autohide(a.vte, boolToGboolean(a.config.MouseAutohide))
+	if len(a.config.Palette) == 16 {
+		cPalette := make([]*C.char, 16)
+		for i, color := range a.config.Palette {
+			cPalette[i] = C.CString(color)
+			defer C.free(unsafe.Pointer(cPalette[i]))
+		}
+		C.vte_set_colors_full(vte, cFg, cBg, cCursor, &cPalette[0], 16)
+	} else {
+		C.vte_set_colors_full(vte, cFg, cBg, cCursor, nil, 0)
+	}
+
+	C.vte_set_scrollback(vte, C.glong(a.config.Scrollback))
+	C.vte_set_cursor_shape(vte, C.int(a.config.CursorShape))
+	C.vte_set_cursor_blink(vte, C.int(a.config.CursorBlink))
+	C.vte_set_audible_bell(vte, boolToGboolean(a.config.AudibleBell))
+	C.vte_set_allow_hyperlink(vte, boolToGboolean(a.config.AllowHyperlinks))
+	C.vte_set_bold_is_bright(vte, boolToGboolean(a.config.BoldIsBright))
+	C.vte_set_scroll_on_output(vte, boolToGboolean(a.config.ScrollOnOutput))
+	C.vte_set_scroll_on_keystroke(vte, boolToGboolean(a.config.ScrollOnKeystroke))
+	C.vte_set_mouse_autohide(vte, boolToGboolean(a.config.MouseAutohide))
 }
 
 func boolToGboolean(b bool) C.gboolean {
@@ -588,10 +717,15 @@ func (a *App) connectToHost(host SSHHost) {
 	cmd.WriteString(host.Host)
 	cmd.WriteString("\n")
 
+	tab := a.getCurrentTab()
+	if tab == nil {
+		return
+	}
+
 	cmdStr := cmd.String()
 	cCmd := C.CString(cmdStr)
 	defer C.free(unsafe.Pointer(cCmd))
-	C.vte_feed_child_text(a.vte, cCmd)
+	C.vte_feed_child_text(tab.vte, cCmd)
 }
 
 func (a *App) showAddHostDialog() {
@@ -729,12 +863,21 @@ func goKeyPressCallback(event *C.GdkEventKey) C.gboolean {
 	ctrlShift := C.guint(gdk.CONTROL_MASK | gdk.SHIFT_MASK)
 
 	if state&ctrlShift == ctrlShift {
+		tab := app.getCurrentTab()
+		if tab == nil {
+			return C.FALSE
+		}
 		switch keyval {
 		case C.guint(gdk.KEY_C):
-			C.vte_copy_clipboard(app.vte)
+			C.vte_copy_clipboard(tab.vte)
 			return C.TRUE
 		case C.guint(gdk.KEY_V):
-			C.vte_paste_clipboard(app.vte)
+			C.vte_paste_clipboard(tab.vte)
+			return C.TRUE
+		case C.guint(gdk.KEY_T):
+			glib.IdleAdd(func() {
+				app.addNewTab()
+			})
 			return C.TRUE
 		}
 	}
@@ -753,12 +896,17 @@ func (a *App) startSSHMonitor() {
 }
 
 func (a *App) scanForSSHProcesses() {
-	if a.shellPid == 0 {
-		return
-	}
+	var allChildPids []int
 
-	childPids := a.getChildPids(a.shellPid)
-	for _, pid := range childPids {
+	a.mu.Lock()
+	for _, tab := range a.tabs {
+		if tab.shellPid != 0 {
+			allChildPids = append(allChildPids, a.getChildPids(tab.shellPid)...)
+		}
+	}
+	a.mu.Unlock()
+
+	for _, pid := range allChildPids {
 		a.mu.Lock()
 		seen := a.seenSSHPids[pid]
 		a.mu.Unlock()
@@ -921,75 +1069,84 @@ func (a *App) addSSHHost(host, sshUser, port string) {
 	glib.IdleAdd(a.refreshHostList)
 }
 
-func (a *App) findShellPid() {
-	go func() {
-		for i := 0; i < 50; i++ {
-			time.Sleep(100 * time.Millisecond)
-			
-			entries, err := os.ReadDir("/proc")
+func (a *App) findShellPidForTab(tab *TerminalTab) {
+	for i := 0; i < 50; i++ {
+		time.Sleep(100 * time.Millisecond)
+
+		entries, err := os.ReadDir("/proc")
+		if err != nil {
+			continue
+		}
+
+		myPid := os.Getpid()
+
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+
+			pid, err := strconv.Atoi(entry.Name())
 			if err != nil {
 				continue
 			}
 
-			myPid := os.Getpid()
+			statPath := fmt.Sprintf("/proc/%d/stat", pid)
+			data, err := os.ReadFile(statPath)
+			if err != nil {
+				continue
+			}
 
-			for _, entry := range entries {
-				if !entry.IsDir() {
-					continue
-				}
+			fields := strings.Fields(string(data))
+			if len(fields) < 4 {
+				continue
+			}
 
-				pid, err := strconv.Atoi(entry.Name())
-				if err != nil {
-					continue
-				}
+			ppid, err := strconv.Atoi(fields[3])
+			if err != nil {
+				continue
+			}
 
-				statPath := fmt.Sprintf("/proc/%d/stat", pid)
-				data, err := os.ReadFile(statPath)
-				if err != nil {
-					continue
-				}
-
-				fields := strings.Fields(string(data))
-				if len(fields) < 4 {
-					continue
-				}
-
-				ppid, err := strconv.Atoi(fields[3])
-				if err != nil {
-					continue
-				}
-
-				if ppid == myPid {
-					cmdline := a.getProcessCmdline(pid)
-					if strings.Contains(cmdline, "sh") || strings.Contains(cmdline, "bash") || strings.Contains(cmdline, "zsh") || strings.Contains(cmdline, "fish") {
-						a.shellPid = pid
-						a.startSSHMonitor()
-						return
-					}
+			if ppid == myPid {
+				cmdline := a.getProcessCmdline(pid)
+				if strings.Contains(cmdline, "sh") || strings.Contains(cmdline, "bash") || strings.Contains(cmdline, "zsh") || strings.Contains(cmdline, "fish") {
+					tab.shellPid = pid
+					a.startSSHMonitor()
+					return
 				}
 			}
 		}
-	}()
+	}
 }
 
 func (a *App) showContextMenuAt() {
+	tab := a.getCurrentTab()
+	if tab == nil {
+		return
+	}
+
 	menu, _ := gtk.MenuNew()
 
 	copyItem, _ := gtk.MenuItemNewWithLabel("Copy")
 	copyItem.Connect("activate", func() {
-		C.vte_copy_clipboard(a.vte)
+		if t := a.getCurrentTab(); t != nil {
+			C.vte_copy_clipboard(t.vte)
+		}
 	})
 	menu.Append(copyItem)
 
 	pasteItem, _ := gtk.MenuItemNewWithLabel("Paste")
 	pasteItem.Connect("activate", func() {
-		C.vte_paste_clipboard(a.vte)
+		if t := a.getCurrentTab(); t != nil {
+			C.vte_paste_clipboard(t.vte)
+		}
 	})
 	menu.Append(pasteItem)
 
 	selectAllItem, _ := gtk.MenuItemNewWithLabel("Select All")
 	selectAllItem.Connect("activate", func() {
-		C.vte_select_all(a.vte)
+		if t := a.getCurrentTab(); t != nil {
+			C.vte_select_all(t.vte)
+		}
 	})
 	menu.Append(selectAllItem)
 
@@ -1011,7 +1168,7 @@ func (a *App) showSettingsDialog() {
 	dialog.SetTitle("Settings")
 	dialog.AddButton("Cancel", gtk.RESPONSE_CANCEL)
 	dialog.AddButton("Apply", gtk.RESPONSE_OK)
-	dialog.SetDefaultSize(500, 450)
+	dialog.SetDefaultSize(550, 550)
 
 	contentArea, _ := dialog.GetContentArea()
 	contentArea.SetMarginStart(20)
@@ -1031,27 +1188,20 @@ func (a *App) showSettingsDialog() {
 
 	row := 0
 
-	fontLabel, _ := gtk.LabelNew("Font Family:")
+	fontLabel, _ := gtk.LabelNew("Font:")
 	fontLabel.SetHAlign(gtk.ALIGN_END)
-	fontEntry, _ := gtk.EntryNew()
-	fontEntry.SetText(a.config.Font)
-	fontEntry.SetHExpand(true)
+	fontBtn, _ := gtk.FontButtonNew()
+	fontBtn.SetFont(fmt.Sprintf("%s %d", a.config.Font, a.config.FontSize))
+	fontBtn.SetHExpand(true)
 	appearanceGrid.Attach(fontLabel, 0, row, 1, 1)
-	appearanceGrid.Attach(fontEntry, 1, row, 1, 1)
-	row++
-
-	sizeLabel, _ := gtk.LabelNew("Font Size:")
-	sizeLabel.SetHAlign(gtk.ALIGN_END)
-	sizeAdj, _ := gtk.AdjustmentNew(float64(a.config.FontSize), 6, 72, 1, 4, 0)
-	sizeSpin, _ := gtk.SpinButtonNew(sizeAdj, 1, 0)
-	appearanceGrid.Attach(sizeLabel, 0, row, 1, 1)
-	appearanceGrid.Attach(sizeSpin, 1, row, 1, 1)
+	appearanceGrid.Attach(fontBtn, 1, row, 1, 1)
 	row++
 
 	fgLabel, _ := gtk.LabelNew("Foreground:")
 	fgLabel.SetHAlign(gtk.ALIGN_END)
 	fgBtn, _ := gtk.ColorButtonNew()
 	fgBtn.SetTitle("Foreground Color")
+	a.setColorButtonFromHex(fgBtn, a.config.Foreground)
 	appearanceGrid.Attach(fgLabel, 0, row, 1, 1)
 	appearanceGrid.Attach(fgBtn, 1, row, 1, 1)
 	row++
@@ -1060,8 +1210,18 @@ func (a *App) showSettingsDialog() {
 	bgLabel.SetHAlign(gtk.ALIGN_END)
 	bgBtn, _ := gtk.ColorButtonNew()
 	bgBtn.SetTitle("Background Color")
+	a.setColorButtonFromHex(bgBtn, a.config.Background)
 	appearanceGrid.Attach(bgLabel, 0, row, 1, 1)
 	appearanceGrid.Attach(bgBtn, 1, row, 1, 1)
+	row++
+
+	cursorColorLabel, _ := gtk.LabelNew("Cursor Color:")
+	cursorColorLabel.SetHAlign(gtk.ALIGN_END)
+	cursorColorBtn, _ := gtk.ColorButtonNew()
+	cursorColorBtn.SetTitle("Cursor Color")
+	a.setColorButtonFromHex(cursorColorBtn, a.config.CursorColor)
+	appearanceGrid.Attach(cursorColorLabel, 0, row, 1, 1)
+	appearanceGrid.Attach(cursorColorBtn, 1, row, 1, 1)
 	row++
 
 	cursorShapeLabel, _ := gtk.LabelNew("Cursor Shape:")
@@ -1084,6 +1244,26 @@ func (a *App) showSettingsDialog() {
 	cursorBlinkCombo.SetActive(a.config.CursorBlink)
 	appearanceGrid.Attach(cursorBlinkLabel, 0, row, 1, 1)
 	appearanceGrid.Attach(cursorBlinkCombo, 1, row, 1, 1)
+	row++
+
+	paletteLabel, _ := gtk.LabelNew("Color Palette:")
+	paletteLabel.SetHAlign(gtk.ALIGN_END)
+	paletteLabel.SetVAlign(gtk.ALIGN_START)
+	paletteGrid, _ := gtk.GridNew()
+	paletteGrid.SetColumnSpacing(4)
+	paletteGrid.SetRowSpacing(4)
+
+	paletteButtons := make([]*gtk.ColorButton, 16)
+	for i := 0; i < 16; i++ {
+		btn, _ := gtk.ColorButtonNew()
+		if i < len(a.config.Palette) {
+			a.setColorButtonFromHex(btn, a.config.Palette[i])
+		}
+		paletteButtons[i] = btn
+		paletteGrid.Attach(btn, i%8, i/8, 1, 1)
+	}
+	appearanceGrid.Attach(paletteLabel, 0, row, 1, 1)
+	appearanceGrid.Attach(paletteGrid, 1, row, 1, 1)
 
 	appearanceLabel, _ := gtk.LabelNew("Appearance")
 	notebook.AppendPage(appearanceGrid, appearanceLabel)
@@ -1120,6 +1300,11 @@ func (a *App) showSettingsDialog() {
 	terminalGrid.Attach(audibleBellCheck, 0, row, 2, 1)
 	row++
 
+	visualBellCheck, _ := gtk.CheckButtonNewWithLabel("Visual bell")
+	visualBellCheck.SetActive(a.config.VisualBell)
+	terminalGrid.Attach(visualBellCheck, 0, row, 2, 1)
+	row++
+
 	allowHyperlinksCheck, _ := gtk.CheckButtonNewWithLabel("Allow hyperlinks")
 	allowHyperlinksCheck.SetActive(a.config.AllowHyperlinks)
 	terminalGrid.Attach(allowHyperlinksCheck, 0, row, 2, 1)
@@ -1142,28 +1327,25 @@ func (a *App) showSettingsDialog() {
 
 	response := dialog.Run()
 	if response == gtk.RESPONSE_OK {
-		fontText, _ := fontEntry.GetText()
-		a.config.Font = fontText
-		a.config.FontSize = int(sizeSpin.GetValue())
+		fontName := fontBtn.GetFont()
+		a.parseFontName(fontName)
 		a.config.Scrollback = int64(scrollSpin.GetValue())
 
-		fgRGBA := fgBtn.GetRGBA()
-		a.config.Foreground = fmt.Sprintf("#%02X%02X%02X",
-			int(fgRGBA.GetRed()*255),
-			int(fgRGBA.GetGreen()*255),
-			int(fgRGBA.GetBlue()*255))
+		a.config.Foreground = a.getHexFromColorButton(fgBtn)
+		a.config.Background = a.getHexFromColorButton(bgBtn)
+		a.config.CursorColor = a.getHexFromColorButton(cursorColorBtn)
 
-		bgRGBA := bgBtn.GetRGBA()
-		a.config.Background = fmt.Sprintf("#%02X%02X%02X",
-			int(bgRGBA.GetRed()*255),
-			int(bgRGBA.GetGreen()*255),
-			int(bgRGBA.GetBlue()*255))
+		a.config.Palette = make([]string, 16)
+		for i := 0; i < 16; i++ {
+			a.config.Palette[i] = a.getHexFromColorButton(paletteButtons[i])
+		}
 
 		a.config.CursorShape = cursorShapeCombo.GetActive()
 		a.config.CursorBlink = cursorBlinkCombo.GetActive()
 		a.config.ScrollOnOutput = scrollOnOutputCheck.GetActive()
 		a.config.ScrollOnKeystroke = scrollOnKeystrokeCheck.GetActive()
 		a.config.AudibleBell = audibleBellCheck.GetActive()
+		a.config.VisualBell = visualBellCheck.GetActive()
 		a.config.AllowHyperlinks = allowHyperlinksCheck.GetActive()
 		a.config.BoldIsBright = boldIsBrightCheck.GetActive()
 		a.config.MouseAutohide = mouseAutohideCheck.GetActive()
@@ -1172,4 +1354,32 @@ func (a *App) showSettingsDialog() {
 		a.applyTerminalSettings()
 	}
 	dialog.Destroy()
+}
+
+func (a *App) setColorButtonFromHex(btn *gtk.ColorButton, hex string) {
+	rgba := gdk.NewRGBA(0, 0, 0, 1)
+	rgba.Parse(hex)
+	btn.SetRGBA(rgba)
+}
+
+func (a *App) getHexFromColorButton(btn *gtk.ColorButton) string {
+	rgba := btn.GetRGBA()
+	return fmt.Sprintf("#%02X%02X%02X",
+		int(rgba.GetRed()*255),
+		int(rgba.GetGreen()*255),
+		int(rgba.GetBlue()*255))
+}
+
+func (a *App) parseFontName(fontName string) {
+	parts := strings.Split(fontName, " ")
+	if len(parts) >= 2 {
+		sizeStr := parts[len(parts)-1]
+		size, err := strconv.Atoi(sizeStr)
+		if err == nil {
+			a.config.FontSize = size
+			a.config.Font = strings.Join(parts[:len(parts)-1], " ")
+			return
+		}
+	}
+	a.config.Font = fontName
 }
